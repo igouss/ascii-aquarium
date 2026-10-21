@@ -8,6 +8,22 @@ a scene in the Omarchy shader screensaver's rotation.
 All credit for the scenes, their simulation and their look goes to those two
 projects; go see the originals.
 
+![Eight kinds of shark circling bait fish, drawn in ASCII](docs/media/sharks.gif)
+
+**[Watch the 23-second video](docs/media/aquarium.mp4)**: sharks, then koi.
+
+| Sharks | Koi |
+| --- | --- |
+| ![The full shark cast on navy water](docs/media/sharks.png) | ![Koi in a dark pond](docs/media/koi.png) |
+
+Up close, a hammerhead is countershaded blocks with a density-ramp texture,
+traced outlines and a soft shadow:
+
+![A hammerhead up close](docs/media/sharks-closeup.png)
+
+The media are rendered offline from the simulation (2560x1440, 30 fps) with
+the same font, not screen-captured.
+
 ## Run
 
 ```sh
