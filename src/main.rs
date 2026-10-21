@@ -1,5 +1,5 @@
-//! ascii-sharks and ascii-koi as a terminal screensaver. With `--app-id` it
-//! acts as the Omarchy screensaver in a fullscreen terminal window.
+//! ascii-sharks and ascii-koi as a screensaver, in a fullscreen GPUI window.
+//! With `--app-id` it acts as the Omarchy screensaver.
 
 mod adapters;
 mod app;
@@ -25,7 +25,7 @@ use crate::{
         hyprland::{HiddenPointer, Hyprland},
         journal::Journal,
         siblings,
-        terminal::Terminal,
+        window::{self, Exits},
     },
     app::Session,
     domain::{
@@ -144,46 +144,47 @@ fn run(cli: &Cli) -> Result<(), String> {
             .map_err(|e| format!("--log: {e}"))?;
     }
 
-    let screensaver = cli.app_id.as_deref();
-    let pointer = screensaver.map(|_| HiddenPointer::new());
-    let started = Instant::now();
-    let reason = thread::scope(|scope| {
-        let watcher = screensaver.map(|id| {
-            let presence = Hyprland::new(id);
-            scope.spawn(|| {
-                app::watch(
-                    presence,
-                    &stop,
-                    || started.elapsed(),
-                    || thread::sleep(PRESENCE_POLL),
-                )
-            })
+    let screensaver = cli.app_id.is_some();
+    let focus_left = Arc::new(AtomicBool::new(false));
+    if let Some(id) = &cli.app_id {
+        let presence = Hyprland::new(id.clone());
+        let left = Arc::clone(&focus_left);
+        thread::spawn(move || {
+            let started = Instant::now();
+            app::watch(
+                presence,
+                &left,
+                || started.elapsed(),
+                || thread::sleep(PRESENCE_POLL),
+            )
         });
-        let mut session = Session::new(kind, seed);
-        let shown = Terminal::open()
-            .and_then(|mut terminal| terminal.play(&mut session, fps, &stop, || started.elapsed()));
-        // Ends the watch, if the show ended some other way.
-        stop.store(true, Ordering::Relaxed);
-        let focus_left = watcher.is_some_and(|w| w.join().unwrap_or(false));
-        match shown {
-            _ if focus_left => Ok(StopReason::FocusLeft),
-            // The terminal reports going away this way.
-            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(StopReason::WindowClosed),
-            shown => shown,
+    }
+    let pointer = screensaver.then(HiddenPointer::new);
+    let started = Instant::now();
+    let on_stop = move |reason: StopReason| {
+        drop(pointer);
+        if let Some(journal) = &journal
+            && let Err(e) = journal.stopped(started.elapsed(), reason)
+        {
+            let _ = writeln!(io::stderr(), "ascii-aquarium: --log: {e}");
         }
-    })
-    .map_err(|e| format!("terminal: {e}"))?;
-    drop(pointer);
-
-    if let Some(journal) = &journal {
-        journal
-            .stopped(started.elapsed(), reason)
-            .map_err(|e| format!("--log: {e}"))?;
-    }
-    // Dismissing one monitor's screensaver dismisses them all. Those stopped
-    // by a signal (likely from a sibling) leave the rest be.
-    if screensaver.is_some() && reason != StopReason::WindowClosed {
-        siblings::terminate_siblings();
-    }
+        // Dismissing one monitor's screensaver dismisses them all. Those
+        // stopped by a signal (likely from a sibling) leave the rest be.
+        if screensaver && reason != StopReason::WindowClosed {
+            siblings::terminate_siblings();
+        }
+    };
+    window::run(
+        Session::new(kind, seed),
+        fps,
+        cli.app_id
+            .clone()
+            .unwrap_or_else(|| "ascii-aquarium".to_owned()),
+        Exits {
+            stop,
+            focus_left,
+            on_stop: Box::new(on_stop),
+        },
+    );
     Ok(())
 }

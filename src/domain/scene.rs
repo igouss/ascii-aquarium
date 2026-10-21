@@ -1,5 +1,11 @@
 //! A whole scene: the pond, its predators, and how a frame of it is drawn.
 
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "cell counts of a window, after a ceil and a max of 1"
+)]
+
 use super::frame::{Color, Frame, Grid};
 use super::koi::{self, Koi, KoiSpec};
 use super::koi_skin::{KoiSkins, Theme};
@@ -22,6 +28,26 @@ enum Cast {
 pub enum Kind {
     Sharks(Vec<SharkSpec>),
     Koi(Vec<KoiSpec>, Theme),
+}
+
+impl Kind {
+    /// The cell grid on a window `width` by `height` pixels, sized the way the
+    /// originals size theirs: the koi need a finer grid for fins and tails.
+    #[must_use]
+    pub fn grid(&self, width: f32, height: f32) -> Grid {
+        let (per, min, max) = match self {
+            Self::Sharks(_) => (124.0, 8.0, 13.0),
+            Self::Koi(..) => (150.0, 7.0, 11.0),
+        };
+        let cw = (width / per).round().clamp(min, max);
+        let ch = (cw * 1.45).round();
+        Grid {
+            cols: (width / cw).ceil().max(1.0) as usize,
+            rows: (height / ch).ceil().max(1.0) as usize,
+            cw,
+            ch,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -140,6 +166,32 @@ mod tests {
             assert!(fish > 50, "{kind:?}: {fish} fish");
             assert!(blocks > 100, "{kind:?}: {blocks} predator cells");
         }
+    }
+
+    #[test]
+    fn grids_follow_the_originals() {
+        let sharks = Kind::Sharks(DEFAULT_SHARKS.to_vec()).grid(2560.0, 1440.0);
+        assert_eq!(
+            sharks,
+            Grid {
+                cols: 197,
+                rows: 76,
+                cw: 13.0,
+                ch: 19.0
+            }
+        );
+        let koi = Kind::Koi(DEFAULT_KOI.to_vec(), Theme::Dark).grid(2560.0, 1440.0);
+        assert_eq!(
+            koi,
+            Grid {
+                cols: 233,
+                rows: 90,
+                cw: 11.0,
+                ch: 16.0
+            }
+        );
+        let small = Kind::Sharks(DEFAULT_SHARKS.to_vec()).grid(640.0, 480.0);
+        assert_eq!((small.cw, small.ch), (8.0, 12.0));
     }
 
     fn kind_bg(kind: &Kind) -> [f32; 3] {

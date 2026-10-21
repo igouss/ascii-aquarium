@@ -11,11 +11,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4.6", features = ["derive"] }
 ctrlc = { version = "3.5", features = ["termination"] }
 fastrand = "2.5"
-rustix = { version = "1.1", features = ["event", "fs", "process", "stdio", "termios"] }
-
-[dev-dependencies.rustix]
-version = "1.1"
-features = ["pty"]
+# Zed's UI framework, as the gpui-pre snapshot on crates.io: the 0.2 release
+# pins an xattr that no longer builds. Wayland only; Omarchy has no X11.
+gpui = { package = "gpui-pre", version = "=0.3.6", default-features = false, features = ["wayland"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["wayland"] }
+rustix = { version = "1.1", features = ["process"] }
 
 [dev-dependencies]
 proptest = "1.11"

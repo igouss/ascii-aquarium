@@ -2,7 +2,6 @@
 //! comes in as `dt`, randomness from the pond's seeded generator, and frames
 //! go out as cells.
 
-pub mod ansi;
 pub mod focus;
 pub mod frame;
 pub mod input;

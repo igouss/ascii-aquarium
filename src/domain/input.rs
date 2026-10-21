@@ -5,7 +5,7 @@
 
 use std::{fmt, time::Duration};
 
-/// Input from the terminal.
+/// Input from the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Input {
     /// A key press, or pasted text.
@@ -14,8 +14,6 @@ pub enum Input {
     Pointer,
     /// The pointer moved into this cell.
     PointerMotion { column: u16, row: u16 },
-    /// A mouse button let go.
-    Release,
 }
 
 /// Why the screensaver stopped.
@@ -64,7 +62,6 @@ impl Dismissal {
         match input {
             Input::Key => armed.then_some(StopReason::KeyPress),
             Input::Pointer => armed.then_some(StopReason::ClickOrScroll),
-            Input::Release => None,
             Input::PointerMotion { column, row } => {
                 let from = self.pointer.replace((column, row));
                 if elapsed <= MOTION_ARMED_AFTER {
@@ -77,85 +74,6 @@ impl Dismissal {
                 (self.travel > JITTER_CELLS).then_some(StopReason::MouseMoved)
             }
         }
-    }
-}
-
-const ESC: u8 = 0x1b;
-
-/// Turns terminal input bytes into [`Input`]s. Mouse reports come in SGR
-/// form (`ESC [ < b ; column ; row M`, `m` on release); anything else is a key.
-#[derive(Debug, Clone, Default)]
-pub struct Decoder {
-    /// The start of an escape sequence the last read cut short.
-    pending: Vec<u8>,
-}
-
-impl Decoder {
-    pub fn feed(&mut self, bytes: &[u8], out: &mut impl FnMut(Input)) {
-        let mut buf = std::mem::take(&mut self.pending);
-        buf.extend_from_slice(bytes);
-        let mut i = 0;
-        while i < buf.len() {
-            if buf[i..] == [ESC] {
-                // Escape, or the start of a sequence cut short: see `flush`.
-                self.pending = vec![ESC];
-                return;
-            }
-            if buf[i] != ESC || buf[i + 1] != b'[' {
-                // A lone ESC, an Alt chord or a plain key: one key press per read
-                // is all the dismissal needs, so skip ahead.
-                out(Input::Key);
-                i = next_escape(&buf, i + 1);
-                continue;
-            }
-            // A CSI sequence: parameters, then a final byte in 0x40..=0x7e.
-            let Some(end) = buf[i + 2..].iter().position(|b| (0x40..=0x7e).contains(b)) else {
-                self.pending = buf[i..].to_vec();
-                return;
-            };
-            let end = i + 2 + end;
-            out(csi(&buf[i + 2..end], buf[end]).unwrap_or(Input::Key));
-            i = end + 1;
-        }
-    }
-}
-
-impl Decoder {
-    /// Called once input goes quiet: a lone ESC left pending was the Escape key.
-    pub fn flush(&mut self, out: &mut impl FnMut(Input)) {
-        if self.pending == [ESC] {
-            out(Input::Key);
-        }
-        self.pending.clear();
-    }
-}
-
-fn next_escape(buf: &[u8], from: usize) -> usize {
-    buf[from..]
-        .iter()
-        .position(|&b| b == ESC)
-        .map_or(buf.len(), |p| from + p)
-}
-
-/// A CSI sequence with `params` and `final_byte` as input: mouse reports are
-/// pointer input, a release is nothing, anything else is a key.
-fn csi(params: &[u8], final_byte: u8) -> Option<Input> {
-    let report = params.strip_prefix(b"<")?;
-    let mut fields = std::str::from_utf8(report)
-        .ok()?
-        .split(';')
-        .map(str::parse::<u16>);
-    let (Some(Ok(button)), Some(Ok(column)), Some(Ok(row))) =
-        (fields.next(), fields.next(), fields.next())
-    else {
-        return None;
-    };
-    match final_byte {
-        b'M' if button & 32 != 0 => Some(Input::PointerMotion { column, row }),
-        b'M' => Some(Input::Pointer),
-        // A release only follows a press, which already counted.
-        b'm' => Some(Input::Release),
-        _ => None,
     }
 }
 
@@ -224,54 +142,6 @@ mod tests {
             "focus left the screensaver or the session locked"
         );
         assert_eq!(StopReason::WindowClosed.to_string(), "window closed");
-    }
-
-    fn decoded(chunks: &[&[u8]]) -> Vec<Input> {
-        let mut decoder = Decoder::default();
-        let mut inputs = Vec::new();
-        for chunk in chunks {
-            decoder.feed(chunk, &mut |input| inputs.push(input));
-        }
-        inputs
-    }
-
-    #[test]
-    fn keys_are_keys() {
-        assert_eq!(decoded(&[b"q"]), [Input::Key]);
-        let mut decoder = Decoder::default();
-        let mut inputs = Vec::new();
-        decoder.feed(b"\x1b", &mut |input| inputs.push(input));
-        assert_eq!(inputs, [], "maybe the start of a sequence");
-        decoder.flush(&mut |input| inputs.push(input));
-        assert_eq!(inputs, [Input::Key], "no: Escape");
-        assert_eq!(decoded(&[b"\x1b[A"]), [Input::Key], "an arrow");
-        assert_eq!(decoded(&[b"ab\x1b[B"]), [Input::Key, Input::Key]);
-    }
-
-    #[test]
-    fn mouse_reports_are_pointer_input() {
-        assert_eq!(decoded(&[b"\x1b[<35;12;7M"]), [moved(12, 7)]);
-        assert_eq!(
-            decoded(&[b"\x1b[<0;3;4M\x1b[<0;3;4m"]),
-            [Input::Pointer, Input::Release]
-        );
-        assert_eq!(decoded(&[b"\x1b[<64;3;4M"]), [Input::Pointer], "scroll");
-        assert_eq!(decoded(&[b"\x1b[<99999;3;4M"]), [Input::Key], "garbled");
-    }
-
-    #[test]
-    fn a_report_split_across_reads_is_reassembled() {
-        assert_eq!(decoded(&[b"\x1b[<35;1", b"2;7M"]), [moved(12, 7)]);
-        assert_eq!(decoded(&[b"\x1b", b"[<35;12;7M"]), [moved(12, 7)]);
-        assert_eq!(
-            decoded(&[b"\x1b[<35;12;7M\x1b[", b"<35;13;7M"]),
-            [moved(12, 7), moved(13, 7)]
-        );
-    }
-
-    #[test]
-    fn a_release_never_dismisses() {
-        assert_eq!(Dismissal::default().judge(Input::Release, SETTLED), None);
     }
 
     fn input() -> impl Strategy<Value = Input> {

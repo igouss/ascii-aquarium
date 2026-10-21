@@ -49,6 +49,12 @@ impl Session {
         }
     }
 
+    /// The scene's grid on a window `width` by `height` pixels.
+    #[must_use]
+    pub fn grid(&self, width: f32, height: f32) -> Grid {
+        self.kind.grid(width, height)
+    }
+
     /// Catches the simulation up to `now` on `grid` and draws it. A new grid
     /// starts the scene over: its pond is sized to the screen.
     pub fn advance(&mut self, grid: Grid, now: Duration) -> &Frame {
