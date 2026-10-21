@@ -1,6 +1,6 @@
-//! The scene in a fullscreen GPUI window: each frame's cells drawn as one
-//! shaped line per row, a colour run per change, with cell backgrounds from
-//! the runs; keys, clicks and pointer motion fed to the session.
+//! The scene in a fullscreen GPUI window: each frame's blocks drawn as one
+//! quad per run of a colour, and each non-blank cell as a glyph shaped once
+//! and kept; keys, clicks and pointer motion fed to the session.
 
 #![expect(
     clippy::cast_precision_loss,
@@ -10,6 +10,8 @@
 )]
 
 use std::{
+    collections::HashMap,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -18,8 +20,8 @@ use std::{
 };
 
 use gpui::{
-    App, Bounds, Context, Font, FontWeight, Hsla, KeyDownEvent, MouseDownEvent, MouseMoveEvent,
-    Pixels, Render, Rgba, ScrollWheelEvent, SharedString, TextAlign, TextRun, Window,
+    App, Bounds, Context, Font, FontId, FontWeight, GlyphId, Hsla, KeyDownEvent, MouseDownEvent,
+    MouseMoveEvent, Pixels, Point, Render, Rgba, ScrollWheelEvent, TextRun, Window,
     WindowBackgroundAppearance, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px,
     size,
 };
@@ -47,10 +49,79 @@ pub struct Exits {
     pub on_stop: Box<dyn FnOnce(StopReason)>,
 }
 
+/// A glyph as shaped on its own: the face that has it, its id there, and
+/// where it sits from the cell's baseline origin.
+#[derive(Debug, Clone, Copy)]
+struct Glyph {
+    font: FontId,
+    id: GlyphId,
+    offset: Point<Pixels>,
+}
+
+/// Every glyph the scene has drawn, shaped once at the grid's font size.
+/// Every frame's text differs, so shaping whole rows each frame missed
+/// GPUI's line cache every time and cost several times the simulation.
+#[derive(Debug, Clone)]
+struct Glyphs {
+    grid: Grid,
+    size: Pixels,
+    /// From a cell's top to the baseline, as a shaped line centres it.
+    baseline: Pixels,
+    by_char: HashMap<char, Option<Glyph>>,
+}
+
+impl Glyphs {
+    fn new(grid: Grid, window: &Window) -> Self {
+        let size = px((grid.ch * GLYPH_SCALE).round());
+        let line = shape(window, 'M', size);
+        let padding = (px(grid.ch) - line.ascent - line.descent) / 2.0;
+        Self {
+            grid,
+            size,
+            baseline: padding + line.ascent,
+            by_char: HashMap::new(),
+        }
+    }
+
+    /// Shapes the glyphs in `frame` not seen before.
+    fn learn(&mut self, frame: &Frame, window: &Window) {
+        for cell in frame.cells.iter().filter(|c| c.glyph != ' ') {
+            self.by_char.entry(cell.glyph).or_insert_with(|| {
+                let line = shape(window, cell.glyph, self.size);
+                let run = line.runs.first()?;
+                let glyph = run.glyphs.first()?;
+                Some(Glyph {
+                    font: run.font_id,
+                    id: glyph.id,
+                    offset: glyph.position,
+                })
+            });
+        }
+    }
+}
+
+fn shape(window: &Window, glyph: char, size: Pixels) -> Arc<gpui::LineLayout> {
+    let run = TextRun {
+        len: glyph.len_utf8(),
+        font: Font {
+            weight: FontWeight::SEMIBOLD,
+            ..gpui::font(FONT)
+        },
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .layout_line(glyph.encode_utf8(&mut [0; 4]), size, &[run], None)
+}
+
 struct Aquarium {
     session: Session,
     started: Instant,
     grid: Grid,
+    glyphs: Option<Rc<Glyphs>>,
     exits: Option<Exits>,
     focus: gpui::FocusHandle,
 }
@@ -94,6 +165,12 @@ impl Render for Aquarium {
             .grid(f32::from(viewport.width), f32::from(viewport.height));
         let grid = self.grid;
         let frame = self.session.advance(grid, self.started.elapsed()).clone();
+        let glyphs = match &mut self.glyphs {
+            Some(glyphs) if glyphs.grid == grid => glyphs,
+            stale => stale.insert(Rc::new(Glyphs::new(grid, window))),
+        };
+        Rc::make_mut(glyphs).learn(&frame, window);
+        let glyphs = Rc::clone(glyphs);
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -112,7 +189,7 @@ impl Render for Aquarium {
             .child(
                 canvas(
                     |_, _, _| (),
-                    move |bounds, (), window, cx| paint(&frame, grid, bounds, window, cx),
+                    move |bounds, (), window, _| paint(&frame, &glyphs, bounds, window),
                 )
                 .size_full(),
             )
@@ -129,52 +206,32 @@ fn hsla(c: Color) -> Hsla {
     .into()
 }
 
-/// Paints `frame` row by row: one shaped line each, with a run per change
-/// of colour, every glyph forced to the cell width.
-fn paint(frame: &Frame, grid: Grid, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+/// Paints `frame` over a base of its first cell's background: a quad per run
+/// of another background in a row, then the glyph of every non-blank cell.
+fn paint(frame: &Frame, glyphs: &Glyphs, bounds: Bounds<Pixels>, window: &mut Window) {
     let Some(first) = frame.cells.first() else {
         return;
     };
     window.paint_quad(gpui::fill(bounds, hsla(first.bg)));
-    let font = Font {
-        weight: FontWeight::SEMIBOLD,
-        ..gpui::font(FONT)
-    };
-    let font_size = px((grid.ch * GLYPH_SCALE).round());
-    let line_height = px(grid.ch);
-    let mut text = String::with_capacity(frame.cols * 2);
-    let mut runs: Vec<TextRun> = Vec::new();
+    let Grid { cw, ch, .. } = glyphs.grid;
     for (r, row) in frame.cells.chunks(frame.cols.max(1)).enumerate() {
-        text.clear();
-        runs.clear();
-        for cell in row {
-            let start = text.len();
-            text.push(cell.glyph);
-            let len = text.len() - start;
-            let (color, background) = (hsla(cell.fg), (cell.bg != first.bg).then(|| hsla(cell.bg)));
-            match runs.last_mut() {
-                Some(run) if run.color == color && run.background_color == background => {
-                    run.len += len;
-                }
-                _ => runs.push(TextRun {
-                    len,
-                    font: font.clone(),
-                    color,
-                    background_color: background,
-                    underline: None,
-                    strikethrough: None,
-                }),
+        let top = bounds.origin + point(px(0.0), px(r as f32 * ch));
+        let mut col = 0;
+        for run in row.chunk_by(|a, b| a.bg == b.bg) {
+            if run[0].bg != first.bg {
+                let at = top + point(px(col as f32 * cw), px(0.0));
+                let extent = size(px(run.len() as f32 * cw), px(ch));
+                window.paint_quad(gpui::fill(Bounds::new(at, extent), hsla(run[0].bg)));
             }
+            col += run.len();
         }
-        let line = window.text_system().shape_line(
-            SharedString::from(text.clone()),
-            font_size,
-            &runs,
-            Some(px(grid.cw)),
-        );
-        let origin = point(bounds.origin.x, bounds.origin.y + px(r as f32 * grid.ch));
-        let _ = line.paint_background(origin, line_height, TextAlign::Left, None, window, cx);
-        let _ = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+        for (c, cell) in row.iter().enumerate() {
+            let Some(Some(glyph)) = glyphs.by_char.get(&cell.glyph) else {
+                continue;
+            };
+            let origin = top + point(px(c as f32 * cw), glyphs.baseline) + glyph.offset;
+            let _ = window.paint_glyph(origin, glyph.font, glyph.id, glyphs.size, hsla(cell.fg));
+        }
     }
 }
 
@@ -221,6 +278,7 @@ pub fn run(session: Session, fps: u32, app_id: String, exits: Exits) {
                         cw: 1.0,
                         ch: 1.0,
                     },
+                    glyphs: None,
                     exits: Some(exits),
                     focus,
                 }
