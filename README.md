@@ -5,7 +5,8 @@
 ported from a browser canvas to Rust and drawn in a fullscreen GPUI window, as
 a scene in the Omarchy shader screensaver's rotation.
 
-ascii-sharks carries no licence, so this port stays private.
+All credit for the scenes, their simulation and their look goes to those two
+projects; go see the originals.
 
 ## Run
 
