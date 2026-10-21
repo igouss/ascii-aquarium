@@ -27,7 +27,7 @@ use crate::{
         siblings,
         terminal::Terminal,
     },
-    app::Settings,
+    app::Session,
     domain::{
         input::StopReason,
         koi::{self, KoiKind},
@@ -130,11 +130,7 @@ fn run(cli: &Cli) -> Result<(), String> {
     } else {
         cli.max_fps.min(60)
     };
-    let settings = Settings {
-        kind,
-        fps,
-        seed: cli.seed.unwrap_or_else(|| fastrand::u64(..)),
-    };
+    let seed = cli.seed.unwrap_or_else(|| fastrand::u64(..));
 
     let stop = Arc::new(AtomicBool::new(false));
     let on_signal = Arc::clone(&stop);
@@ -151,18 +147,32 @@ fn run(cli: &Cli) -> Result<(), String> {
     let screensaver = cli.app_id.as_deref();
     let pointer = screensaver.map(|_| HiddenPointer::new());
     let started = Instant::now();
-    let reason = {
-        let mut terminal = Terminal::open().map_err(|e| format!("not a terminal: {e}"))?;
-        app::run(
-            &mut terminal,
-            &settings,
-            screensaver.map(Hyprland::new),
-            &stop,
-            || started.elapsed(),
-            || thread::sleep(PRESENCE_POLL),
-        )
-        .map_err(|e| format!("terminal: {e}"))?
-    };
+    let reason = thread::scope(|scope| {
+        let watcher = screensaver.map(|id| {
+            let presence = Hyprland::new(id);
+            scope.spawn(|| {
+                app::watch(
+                    presence,
+                    &stop,
+                    || started.elapsed(),
+                    || thread::sleep(PRESENCE_POLL),
+                )
+            })
+        });
+        let mut session = Session::new(kind, seed);
+        let shown = Terminal::open()
+            .and_then(|mut terminal| terminal.play(&mut session, fps, &stop, || started.elapsed()));
+        // Ends the watch, if the show ended some other way.
+        stop.store(true, Ordering::Relaxed);
+        let focus_left = watcher.is_some_and(|w| w.join().unwrap_or(false));
+        match shown {
+            _ if focus_left => Ok(StopReason::FocusLeft),
+            // The terminal reports going away this way.
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(StopReason::WindowClosed),
+            shown => shown,
+        }
+    })
+    .map_err(|e| format!("terminal: {e}"))?;
     drop(pointer);
 
     if let Some(journal) = &journal {

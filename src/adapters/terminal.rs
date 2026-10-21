@@ -10,6 +10,7 @@
 
 use std::{
     io,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -22,12 +23,12 @@ use rustix::{
 };
 
 use crate::{
+    app::Session,
     domain::{
         ansi,
-        frame::Frame,
-        input::{Decoder, Input},
+        frame::{Frame, Grid},
+        input::{Decoder, Input, StopReason},
     },
-    ports::Screen,
 };
 
 /// Alternate screen, hidden cursor, no autowrap, any-motion mouse reports in
@@ -123,8 +124,46 @@ impl Drop for Terminal {
     }
 }
 
-impl Screen for Terminal {
-    fn size(&mut self) -> io::Result<(usize, usize, f32, f32)> {
+impl Terminal {
+    /// Plays `session` until an input dismisses it or `stop` is set (by a
+    /// signal, or the focus watch); `now` is the time since it started.
+    ///
+    /// # Errors
+    ///
+    /// If the terminal fails other than by going away.
+    pub fn play(
+        &mut self,
+        session: &mut Session,
+        fps: u32,
+        stop: &AtomicBool,
+        now: impl Fn() -> Duration,
+    ) -> io::Result<StopReason> {
+        let frame_time = Duration::from_secs(1) / fps.max(1);
+        loop {
+            let (cols, rows, cw, ch) = Self::size()?;
+            let started = now();
+            let frame = session.advance(Grid { cols, rows, cw, ch }, started);
+            self.show(frame)?;
+            let mut reason = None;
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(reason.unwrap_or(StopReason::WindowClosed));
+                }
+                let left = frame_time.saturating_sub(now().saturating_sub(started));
+                if left.is_zero() || reason.is_some() {
+                    break;
+                }
+                self.wait(left, &mut |input| {
+                    reason = reason.or_else(|| session.input(input, now()));
+                })?;
+            }
+            if let Some(reason) = reason {
+                return Ok(reason);
+            }
+        }
+    }
+
+    fn size() -> io::Result<(usize, usize, f32, f32)> {
         let size = tcgetwinsize(stdout())?;
         let (cols, rows) = (
             usize::from(size.ws_col.max(1)),
