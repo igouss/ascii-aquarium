@@ -1,0 +1,4 @@
+# install.sh builds the screensaver on the machine that runs it, so it may use
+# every instruction this CPU has.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]

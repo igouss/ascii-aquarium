@@ -1,0 +1,46 @@
+[package]
+name = "ascii-aquarium"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Omarchy screensaver: ascii-sharks and ascii-koi, ported from canvas to a truecolor terminal"
+publish = false
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4.6", features = ["derive"] }
+ctrlc = { version = "3.5", features = ["termination"] }
+fastrand = "2.5"
+rustix = { version = "1.1", features = ["event", "fs", "process", "stdio", "termios"] }
+
+[dev-dependencies.rustix]
+version = "1.1"
+features = ["pty"]
+
+[dev-dependencies]
+proptest = "1.11"
+
+# Whole-program optimisation: one codegen unit, fat LTO across all crates, no
+# unwinding tables, no symbols. Built for the CPU it runs on via
+# .cargo/config.toml.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+
+# Strict: every group but restriction, plus the restriction lints worth having.
+# Build with `cargo clippy --all-targets -- -D warnings`.
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+clone_on_ref_ptr = "warn"
+dbg_macro = "warn"
+unwrap_used = "warn"
