@@ -15,12 +15,51 @@ use super::pond::{NODES, nonzero};
 /// Sub-cell sample offsets for anti-aliased silhouettes.
 const SUBSAMPLES: [(f32, f32); 4] = [(0.25, 0.3), (0.75, 0.3), (0.25, 0.72), (0.75, 0.72)];
 
+const SEGMENTS: usize = NODES - 1;
+
 /// The render spine of one predator this frame.
 #[derive(Debug, Clone)]
 pub struct Pose {
     spine: [f32; NODES * 2],
     arc: [f32; NODES],
     arc_total: f32,
+    segments: Segments,
+}
+
+/// Each spine segment's start, run and squared length, worked out once per
+/// pose rather than once per sample, and laid out so the nearest-segment
+/// search is a straight loop the compiler vectorises: it is most of the
+/// cost of drawing a frame.
+#[derive(Debug, Clone)]
+struct Segments {
+    ax: [f32; SEGMENTS],
+    ay: [f32; SEGMENTS],
+    sx: [f32; SEGMENTS],
+    sy: [f32; SEGMENTS],
+    len2: [f32; SEGMENTS],
+}
+
+impl Segments {
+    fn new(spine: &[f32; NODES * 2]) -> Self {
+        let mut segments = Self {
+            ax: [0.0; SEGMENTS],
+            ay: [0.0; SEGMENTS],
+            sx: [0.0; SEGMENTS],
+            sy: [0.0; SEGMENTS],
+            len2: [0.0; SEGMENTS],
+        };
+        for k in 0..SEGMENTS {
+            let (ax, ay) = (spine[k * 2], spine[k * 2 + 1]);
+            let sx = spine[(k + 1) * 2] - ax;
+            let sy = spine[(k + 1) * 2 + 1] - ay;
+            segments.ax[k] = ax;
+            segments.ay[k] = ay;
+            segments.sx[k] = sx;
+            segments.sy[k] = sy;
+            segments.len2[k] = nonzero(sx.mul_add(sx, sy * sy), 1.0);
+        }
+        segments
+    }
 }
 
 /// Where a point sits relative to the spine.
@@ -63,6 +102,7 @@ impl Pose {
         }
         let arc_total = nonzero(arc[NODES - 1], 1.0);
         Self {
+            segments: Segments::new(&spine),
             spine,
             arc,
             arc_total,
@@ -71,43 +111,57 @@ impl Pose {
 
     #[must_use]
     pub fn nearest(&self, px: f32, py: f32) -> Nearest {
-        let spine = &self.spine;
-        let mut best = f32::INFINITY;
-        let mut nearest = Nearest {
-            dist: 0.0,
-            s: 0.0,
-            sign: 1.0,
-            tangent: (1.0, 0.0),
-            past_tail: 0.0,
-        };
-        for k in 0..NODES - 1 {
-            let (ax, ay) = (spine[k * 2], spine[k * 2 + 1]);
-            let sx = spine[(k + 1) * 2] - ax;
-            let sy = spine[(k + 1) * 2 + 1] - ay;
-            let len2 = nonzero(sx.mul_add(sx, sy * sy), 1.0);
-            let raw = (px - ax).mul_add(sx, (py - ay) * sy) / len2;
-            let u = clamp(raw, 0.0, 1.0);
-            let d2 = (py - sy.mul_add(u, ay))
-                .mul_add(py - sy.mul_add(u, ay), (px - sx.mul_add(u, ax)).powi(2));
-            if d2 < best {
-                best = d2;
-                let len = len2.sqrt();
-                nearest.s = u.mul_add(len, self.arc[k]) / self.arc_total;
-                nearest.sign = if sy.mul_add(-(px - ax), sx * (py - ay)) >= 0.0 {
-                    1.0
-                } else {
-                    -1.0
-                };
-                nearest.tangent = (sx / len, sy / len);
-                nearest.past_tail = if k == NODES - 2 {
-                    (raw - 1.0).max(0.0) * len
-                } else {
-                    0.0
-                };
+        let Segments {
+            ax,
+            ay,
+            sx,
+            sy,
+            len2,
+        } = &self.segments;
+        let mut raw = [0.0; SEGMENTS];
+        let mut d2 = [0.0; SEGMENTS];
+        for k in 0..SEGMENTS {
+            raw[k] = (px - ax[k]).mul_add(sx[k], (py - ay[k]) * sy[k]) / len2[k];
+            let u = clamp(raw[k], 0.0, 1.0);
+            d2[k] = (py - sy[k].mul_add(u, ay[k])).mul_add(
+                py - sy[k].mul_add(u, ay[k]),
+                (px - sx[k].mul_add(u, ax[k])).powi(2),
+            );
+        }
+        // The first segment at the least distance, as a scan that keeps
+        // only strict improvements would find it.
+        let mut best: Option<(usize, f32)> = None;
+        for (k, &d) in d2.iter().enumerate() {
+            if d < best.map_or(f32::INFINITY, |b| b.1) {
+                best = Some((k, d));
             }
         }
-        nearest.dist = best.sqrt();
-        nearest
+        let Some((k, d2)) = best else {
+            return Nearest {
+                dist: f32::INFINITY,
+                s: 0.0,
+                sign: 1.0,
+                tangent: (1.0, 0.0),
+                past_tail: 0.0,
+            };
+        };
+        let len = len2[k].sqrt();
+        let u = clamp(raw[k], 0.0, 1.0);
+        Nearest {
+            dist: d2.sqrt(),
+            s: u.mul_add(len, self.arc[k]) / self.arc_total,
+            sign: if sy[k].mul_add(-(px - ax[k]), sx[k] * (py - ay[k])) >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            },
+            tangent: (sx[k] / len, sy[k] / len),
+            past_tail: if k == SEGMENTS - 1 {
+                (raw[k] - 1.0).max(0.0) * len
+            } else {
+                0.0
+            },
+        }
     }
 
     /// The cells within `reach` of the spine, clipped to the grid, as
