@@ -119,7 +119,7 @@ impl Scene {
                 water.diffuse(dt);
                 water.place_fish(pond, |i| skins.covers(i));
                 water.paint(frame, &self.palette, |i| skins.covers(i));
-                skins.paint(frame, t);
+                skins.paint(frame);
             }
             Cast::Koi(koi, skins) => {
                 skins.rasterize(koi, t);

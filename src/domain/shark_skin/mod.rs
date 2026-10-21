@@ -1,5 +1,7 @@
-//! Sharks rasterised cell by cell with supersampled edges: grey blocks
-//! shaded by the light, dense glyphs, and shimmering accent colours.
+//! Sharks rasterised cell by cell with supersampled edges, as seen from
+//! above: countershaded blocks, dark along the back and pale at the flanks,
+//! a glyph texture as dense as the shadow, and outlines traced along the
+//! silhouette.
 
 #![expect(
     clippy::cast_possible_truncation,
@@ -23,24 +25,10 @@ mod shape;
 
 use shape::{Shape, shape};
 
-const ACCENTS: [Rgb; 7] = [
-    [224.0, 137.0, 44.0],
-    [224.0, 58.0, 50.0],
-    [180.0, 74.0, 224.0],
-    [51.0, 200.0, 204.0],
-    [60.0, 181.0, 74.0],
-    [49.0, 80.0, 232.0],
-    [217.0, 193.0, 74.0],
-];
-const WHITE: Rgb = [255.0, 255.0, 255.0];
-
-// Sparse glyphs on bright skin, dense glyphs in shadow, so the texture
-// reinforces the shading instead of fighting it.
-const SKIN_RAMP: &[u8] = b":;t%SX8#@";
-const FIN_GLYPHS: &[u8] = b"%;tS:";
-const RIDGE_GLYPHS: &[u8] = b"@8%";
-const EDGE_HEAVY: &[u8] = b":;";
-const EDGE_LIGHT: &[u8] = b".',`";
+// Sparse glyphs on pale skin, dense glyphs in shadow, so the texture
+// reinforces the shading instead of reading as letters.
+const SKIN_RAMP: &[u8] = b".:-=+*#%@";
+const EDGE_LIGHT: &[u8] = b".'`";
 const MARK_GLYPHS: &[u8] = b"#%@";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +36,7 @@ enum Part {
     Body,
     Edge,
     Fin,
-    /// The first dorsal fin, catching the light.
+    /// The first dorsal fin, seen from above as a blade along the spine.
     Ridge,
     Eye,
     /// Dark skin markings: tiger bars, zebra-shark spots.
@@ -172,13 +160,15 @@ impl Posed {
     fn on_body(&self, at: Nearest, w: f32) -> (Part, f32) {
         let (a, s, shape) = (at.dist, at.s, &self.shape);
         let across = a / w;
-        // Rounded back lit from the top-left; flanks fall off into shadow.
+        // Countershaded, as seen from above: a dark back that pales toward
+        // the flanks, where the white belly shows, under a soft light from
+        // the top-left.
         let (nx, ny) = (-at.tangent.1 * at.sign, at.tangent.0 * at.sign);
         let facing = nx.mul_add(-0.6, ny * -0.8) * across;
-        let shade = facing.mul_add(0.26, (across * across).mul_add(-0.42, 0.58));
+        let shade = facing.mul_add(0.12, across.powi(3).mul_add(0.36, 0.34));
         let within = |range: [f32; 2]| s > range[0] && s < range[1];
         if within(shape.dorsal) && across < 0.3 {
-            (Part::Ridge, 1.0)
+            (Part::Ridge, shade)
         } else if within(shape.second_dorsal) && across < 0.4 {
             (Part::Body, shade.max(0.82))
         } else if shape.eye.is_some_and(within) && across > 0.6 {
@@ -247,6 +237,8 @@ struct Skin {
     key: u32,
     depth: f32,
     tint: Rgb,
+    /// A line along the outline or, on the dorsal blade, the spine.
+    stroke: char,
 }
 
 /// The sharks' cells, rasterised once per frame.
@@ -300,22 +292,44 @@ impl SharkSkins {
                         key,
                         depth: sh.depth,
                         tint: posed.shape.tint,
+                        // Outlines follow the silhouette; the dorsal blade
+                        // follows the spine.
+                        stroke: if skin.0 == Part::Edge {
+                            stroke(cell.edge())
+                        } else {
+                            stroke(cell.centre.at.tangent)
+                        },
                     });
                 },
             );
         }
     }
 
-    pub fn paint(&self, frame: &mut Frame, t: f32) {
+    pub fn paint(&self, frame: &mut Frame) {
         for (i, skin) in self.cells.iter().enumerate() {
             let Some(skin) = *skin else { continue };
-            paint_cell(frame, i, skin, t);
+            paint_cell(frame, i, skin);
         }
     }
 }
 
 fn pick(set: &[u8], key: u32) -> char {
     char::from(set[(key >> 8) as usize % set.len()])
+}
+
+/// The line glyph closest to the direction `tangent` on screen, y down,
+/// or a dot when it has none.
+fn stroke((tx, ty): (f32, f32)) -> char {
+    if tx == 0.0 && ty == 0.0 {
+        return '.';
+    }
+    let angle = ty.atan2(tx).rem_euclid(std::f32::consts::PI) / std::f32::consts::PI;
+    match angle {
+        a if !(0.125..0.875).contains(&a) => '-',
+        a if a < 0.375 => '\\',
+        a if a < 0.625 => '|',
+        _ => '/',
+    }
 }
 
 fn tinted(level: f32, tint: Rgb, blue: f32) -> Rgb {
@@ -326,62 +340,58 @@ fn tinted(level: f32, tint: Rgb, blue: f32) -> Rgb {
     ]
 }
 
-fn paint_cell(frame: &mut Frame, i: usize, skin: Skin, t: f32) {
+fn paint_cell(frame: &mut Frame, i: usize, skin: Skin) {
     let Skin {
         part,
         shade,
         key,
         depth,
         tint,
+        stroke,
     } = skin;
     let dim = 0.3f32.mul_add(depth, 0.7);
-    let accent = ACCENTS[key as usize % ACCENTS.len()];
-    // Colours re-roll on a staggered clock so the hide shimmers.
-    let tick = t.mul_add(2.4, (key % 997) as f32 / 97.0).floor() as i32;
-    let roll = hash3(key.cast_signed(), tick, 7);
 
     if part == Part::Edge {
-        // Soft, anti-aliased silhouette: no block, just a light glyph.
-        let set = if shade >= 0.5 { EDGE_HEAVY } else { EDGE_LIGHT };
-        let g = shade.mul_add(80.0, 70.0) * dim;
-        let color = if roll < 0.07 {
-            accent
+        // Soft silhouette: no block, just a glyph. Mostly covered cells trace
+        // the outline along the body; barely touched ones get a faint dot.
+        let glyph = if shade >= 0.4 {
+            stroke
         } else {
-            tinted(g, tint, 6.0)
+            pick(EDGE_LIGHT, key)
         };
-        frame.glyph(i, pick(set, key), color, 1.0);
+        let g = shade.mul_add(70.0, 60.0) * dim;
+        frame.glyph(i, glyph, tinted(g, tint, 6.0), 1.0);
         return;
     }
 
+    let ramp = |shade: f32| {
+        // A step denser now and then, so the skin has grain.
+        let jitter = if key % 5 == 0 { 1.0 } else { 0.0 };
+        let level = clamp(
+            ((1.0 - shade) * 8.99).floor() + jitter,
+            0.0,
+            (SKIN_RAMP.len() - 1) as f32,
+        );
+        char::from(SKIN_RAMP[level as usize])
+    };
     let (level, glyph) = match part {
-        Part::Ridge => (226.0, pick(RIDGE_GLYPHS, key)),
+        Part::Ridge => (shade.mul_add(110.0, 30.0), stroke),
         Part::Eye => (12.0, 'o'),
         Part::Mark => (shade.mul_add(22.0, 24.0), pick(MARK_GLYPHS, key)),
-        Part::Fin => (shade.mul_add(120.0, 40.0), pick(FIN_GLYPHS, key)),
-        Part::Body | Part::Edge => {
-            let jitter = ((key >> 4) % 3) as f32 - 1.0;
-            let ramp = clamp(
-                ((1.0 - shade) * 8.99).floor() + jitter,
-                0.0,
-                (SKIN_RAMP.len() - 1) as f32,
-            );
-            (
-                shade.mul_add(160.0, 46.0),
-                char::from(SKIN_RAMP[ramp as usize]),
-            )
-        }
+        Part::Fin => (shade.mul_add(120.0, 40.0), ramp(shade)),
+        Part::Body | Part::Edge => (shade.mul_add(170.0, 40.0), ramp(shade)),
     };
     // Tinted per species; the classic tint is a cool blue-grey, like a back
     // seen through deep water.
-    frame.block(i, tinted(level * dim, tint, 4.0));
+    let block = tinted(level * dim, tint, 4.0);
+    frame.block(i, block);
 
+    // The texture is the skin a shade darker, the eye a wet glint.
     let ink = match part {
         Part::Eye => [154.0, 160.0, 173.0],
         Part::Mark => tinted(70.0, tint, 0.0),
-        _ if roll < 0.09 => accent,
-        _ if roll < 0.13 => WHITE,
-        _ if shade > 0.55 => [14.0, 15.0, 19.0],
-        _ => [27.0, 29.0, 36.0],
+        Part::Ridge => block.map(|c| c * 1.6),
+        _ => block.map(|c| c * 0.62),
     };
     frame.glyph(i, glyph, ink, 1.0);
 }
@@ -392,6 +402,17 @@ mod tests {
     use crate::domain::frame::Color;
     use crate::domain::pond::Pond;
     use crate::domain::shark::{SharkSpec, seed};
+
+    #[test]
+    fn strokes_follow_the_direction_on_screen() {
+        assert_eq!(stroke((1.0, 0.0)), '-');
+        assert_eq!(stroke((-1.0, 0.05)), '-');
+        assert_eq!(stroke((0.0, 1.0)), '|');
+        assert_eq!(stroke((1.0, 1.0)), '\\', "falling to the right, y down");
+        assert_eq!(stroke((1.0, -1.0)), '/');
+        assert_eq!(stroke((-1.0, 1.0)), '/');
+        assert_eq!(stroke((0.0, 0.0)), '.', "no direction");
+    }
 
     #[test]
     fn a_shark_paints_solid_skin_inside_soft_edges() {
@@ -426,7 +447,7 @@ mod tests {
             );
         }
         let mut frame = Frame::new(grid.cols, grid.rows, Color::default());
-        skins.paint(&mut frame, 0.0);
+        skins.paint(&mut frame);
         let blocks = frame
             .cells
             .iter()

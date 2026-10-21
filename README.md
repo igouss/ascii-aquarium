@@ -32,7 +32,10 @@ The originals draw a grid of ASCII cells on a canvas; so does this. Each frame
 the simulation (fish boids, predator steering, 60 Hz fixed step) is
 rasterised onto cells: five samples per cell against each body and fin shape,
 fully covered cells as a shaded block with a dense glyph, partly covered ones
-as a light edge glyph. Fish are `-`, wake ripples `·`, kills `*`. The window
+as a light edge glyph. Sharks depart from upstream's look toward
+realism: countershaded backs instead of a lit tube, density-ramp glyphs
+instead of letters, no rainbow accents, and outline strokes that follow the
+silhouette. Fish are `-`, wake ripples `·`, kills `*`. The window
 paints a quad per run of a block colour in a row and each non-blank cell as a
 glyph shaped once per grid, since each frame's text is new and shaping it
 every frame cost more than the simulation. The grid follows upstream: cells

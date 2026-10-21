@@ -208,6 +208,26 @@ pub struct Covered<H> {
     pub first: H,
     /// Fraction of the five samples on the body.
     pub coverage: f32,
+    /// Which sub-samples are on the body, bit k for `SUBSAMPLES[k]`.
+    pub mask: u8,
+}
+
+impl<H> Covered<H> {
+    /// Which way the body's edge runs through the cell on screen (y down),
+    /// from where its sub-samples landed: unit-free, and zero when they
+    /// don't say (none, all, or two opposite corners).
+    #[must_use]
+    pub fn edge(&self) -> (f32, f32) {
+        // Towards the body: the mean offset of the sub-samples on it.
+        let (mut nx, mut ny) = (0.0, 0.0);
+        for (k, (sx, sy)) in SUBSAMPLES.iter().enumerate() {
+            if self.mask & (1 << k) != 0 {
+                nx += sx - 0.5;
+                ny += sy - 0.51;
+            }
+        }
+        (-ny, nx)
+    }
 }
 
 /// Supersamples every cell within `reach` of the pose with `sample`, and
@@ -233,10 +253,12 @@ pub fn rasterize<H: Copy>(
             }
             let mut first = centre.hit;
             let mut hits = u8::from(centre.hit.is_some());
-            for (sx, sy) in SUBSAMPLES {
+            let mut mask = 0;
+            for (k, (sx, sy)) in SUBSAMPLES.into_iter().enumerate() {
                 if let Some(hit) = sample(sx.mul_add(grid.cw, x), sy.mul_add(grid.ch, y)).hit {
                     first = first.or(Some(hit));
                     hits += 1;
+                    mask |= 1 << k;
                 }
             }
             let Some(first) = first else { continue };
@@ -247,6 +269,7 @@ pub fn rasterize<H: Copy>(
                 centre,
                 first,
                 coverage: f32::from(hits) / 5.0,
+                mask,
             });
         }
     }
@@ -281,6 +304,46 @@ mod tests {
         let behind = pose.nearest(0.0, 50.0);
         assert!((behind.s - 1.0).abs() < 1e-4 && (behind.past_tail - 10.0).abs() < 1e-3);
         assert!(pose.nearest(150.0, 50.0).past_tail.abs() < f32::EPSILON);
+    }
+
+    fn covered(mask: u8) -> Covered<()> {
+        let at = Pose::new(&straight_spine(200.0, 50.0, 0.0, 190.0), |_| 0.0).nearest(0.0, 0.0);
+        Covered {
+            index: 0,
+            col: 0,
+            row: 0,
+            centre: Sample { at, hit: None },
+            first: (),
+            coverage: 0.0,
+            mask,
+        }
+    }
+
+    #[test]
+    fn edges_run_between_the_samples_on_and_off_the_body() {
+        // Sub-samples: bit 0 top left, 1 top right, 2 bottom left, 3 bottom right.
+        let (x, y) = covered(0b0011).edge();
+        assert!(x > 0.0 && y.abs() < 1e-6, "body above: a level edge");
+        let (x, y) = covered(0b0101).edge();
+        assert!(x.abs() < 1e-6 && y < 0.0, "body left: an upright edge");
+        let (x, y) = covered(0b0001).edge();
+        assert!(
+            x > 0.0 && y < 0.0,
+            "a top-left corner: an edge rising to the right"
+        );
+        let (x, y) = covered(0b0010).edge();
+        assert!(
+            x > 0.0 && y > 0.0,
+            "a top-right corner: an edge falling to the right"
+        );
+    }
+
+    #[test]
+    fn edges_say_nothing_without_a_side() {
+        for mask in [0b0000, 0b1111, 0b1001] {
+            let (x, y) = covered(mask).edge();
+            assert!(x.abs() < 1e-6 && y.abs() < 1e-6, "{mask:04b}: ({x}, {y})");
+        }
     }
 
     #[test]
