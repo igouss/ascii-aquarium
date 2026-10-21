@@ -33,8 +33,9 @@ the simulation (fish boids, predator steering, 60 Hz fixed step) is
 rasterised onto cells: five samples per cell against each body and fin shape,
 fully covered cells as a shaded block with a dense glyph, partly covered ones
 as a light edge glyph. Fish are `-`, wake ripples `·`, kills `*`. The window
-paints each row as one shaped line with a colour run per change and every
-glyph forced to the cell width. The grid follows upstream: cells
+paints a quad per run of a block colour in a row and each non-blank cell as a
+glyph shaped once per grid, since each frame's text is new and shaping it
+every frame cost more than the simulation. The grid follows upstream: cells
 `round(width / 124)` px wide for sharks, `round(width / 150)` for koi, 1.45
 times as tall.
 
