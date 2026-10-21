@@ -72,6 +72,8 @@ impl Grid {
 pub struct Frame {
     pub cols: usize,
     pub rows: usize,
+    /// What the frame was cleared to: the water, under everything drawn.
+    pub bg: Color,
     pub cells: Vec<Cell>,
 }
 
@@ -86,11 +88,13 @@ impl Frame {
         Self {
             cols,
             rows,
+            bg,
             cells: vec![blank; cols * rows],
         }
     }
 
     pub fn clear(&mut self, bg: Color) {
+        self.bg = bg;
         self.cells.fill(Cell {
             glyph: ' ',
             fg: bg,

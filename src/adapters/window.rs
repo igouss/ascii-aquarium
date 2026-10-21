@@ -206,19 +206,16 @@ fn hsla(c: Color) -> Hsla {
     .into()
 }
 
-/// Paints `frame` over a base of its first cell's background: a quad per run
-/// of another background in a row, then the glyph of every non-blank cell.
+/// Paints `frame` over a base of its background: a quad per run of another
+/// background in a row, then the glyph of every non-blank cell.
 fn paint(frame: &Frame, glyphs: &Glyphs, bounds: Bounds<Pixels>, window: &mut Window) {
-    let Some(first) = frame.cells.first() else {
-        return;
-    };
-    window.paint_quad(gpui::fill(bounds, hsla(first.bg)));
+    window.paint_quad(gpui::fill(bounds, hsla(frame.bg)));
     let Grid { cw, ch, .. } = glyphs.grid;
     for (r, row) in frame.cells.chunks(frame.cols.max(1)).enumerate() {
         let top = bounds.origin + point(px(0.0), px(r as f32 * ch));
         let mut col = 0;
         for run in row.chunk_by(|a, b| a.bg == b.bg) {
-            if run[0].bg != first.bg {
+            if run[0].bg != frame.bg {
                 let at = top + point(px(col as f32 * cw), px(0.0));
                 let extent = size(px(run.len() as f32 * cw), px(ch));
                 window.paint_quad(gpui::fill(Bounds::new(at, extent), hsla(run[0].bg)));
