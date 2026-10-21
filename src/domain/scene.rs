@@ -12,7 +12,7 @@ use super::koi_skin::{KoiSkins, Theme};
 use super::pond::Pond;
 use super::shark::{self, Shark, SharkSpec};
 use super::shark_skin::SharkSkins;
-use super::water::{DEEP, Palette, Water};
+use super::water::{OCEAN, Palette, Water};
 
 /// The simulation's fixed time step.
 pub const STEP: f32 = 1.0 / 60.0;
@@ -31,12 +31,13 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The cell grid on a window `width` by `height` pixels, sized the way the
-    /// originals size theirs: the koi need a finer grid for fins and tails.
+    /// The cell grid on a window `width` by `height` pixels. Koi size theirs
+    /// the way the original does; sharks use cells about half upstream's, so
+    /// skin, fins and shading have the room to look real.
     #[must_use]
     pub fn grid(&self, width: f32, height: f32) -> Grid {
         let (per, min, max) = match self {
-            Self::Sharks(_) => (124.0, 8.0, 13.0),
+            Self::Sharks(_) => (366.0, 5.0, 7.0),
             Self::Koi(..) => (150.0, 7.0, 11.0),
         };
         let cw = (width / per).round().clamp(min, max);
@@ -67,7 +68,7 @@ impl Scene {
         let (cast, palette) = match kind {
             Kind::Sharks(specs) => (
                 Cast::Sharks(shark::seed(specs, &mut pond), SharkSkins::new(grid)),
-                DEEP,
+                OCEAN,
             ),
             Kind::Koi(specs, theme) => (
                 Cast::Koi(koi::seed(specs, &mut pond), KoiSkins::new(grid, *theme)),
@@ -118,8 +119,9 @@ impl Scene {
                 water.stir(pond, sharks, |i| sharks[i].speed);
                 water.diffuse(dt);
                 water.place_fish(pond, |i| skins.covers(i));
+                skins.paint_shadows(frame);
                 water.paint(frame, &self.palette, |i| skins.covers(i));
-                skins.paint(frame);
+                skins.paint(frame, t);
             }
             Cast::Koi(koi, skins) => {
                 skins.rasterize(koi, t);
@@ -169,15 +171,15 @@ mod tests {
     }
 
     #[test]
-    fn grids_follow_the_originals() {
+    fn koi_grids_follow_the_original_and_sharks_are_finer() {
         let sharks = Kind::Sharks(DEFAULT_SHARKS.to_vec()).grid(2560.0, 1440.0);
         assert_eq!(
             sharks,
             Grid {
-                cols: 197,
-                rows: 76,
-                cw: 13.0,
-                ch: 19.0
+                cols: 366,
+                rows: 144,
+                cw: 7.0,
+                ch: 10.0
             }
         );
         let koi = Kind::Koi(DEFAULT_KOI.to_vec(), Theme::Dark).grid(2560.0, 1440.0);
@@ -191,12 +193,12 @@ mod tests {
             }
         );
         let small = Kind::Sharks(DEFAULT_SHARKS.to_vec()).grid(640.0, 480.0);
-        assert_eq!((small.cw, small.ch), (8.0, 12.0));
+        assert_eq!((small.cw, small.ch), (5.0, 7.0));
     }
 
     fn kind_bg(kind: &Kind) -> [f32; 3] {
         match kind {
-            Kind::Sharks(_) => DEEP.bg,
+            Kind::Sharks(_) => OCEAN.bg,
             Kind::Koi(_, theme) => theme.palette().bg,
         }
     }

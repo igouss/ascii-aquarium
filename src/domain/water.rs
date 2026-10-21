@@ -39,6 +39,13 @@ pub const DEEP: Palette = Palette {
     wake: [110.0, 230.0, 255.0],
 };
 
+/// Open water seen from above: deep navy rather than black, so the sharks'
+/// shadows show on it.
+pub const OCEAN: Palette = Palette {
+    bg: [4.0, 14.0, 26.0],
+    ..DEEP
+};
+
 #[derive(Debug)]
 pub struct Water {
     grid: Grid,

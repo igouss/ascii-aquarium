@@ -55,7 +55,25 @@ struct Skin {
 pub struct SharkSkins {
     grid: Grid,
     cells: Vec<Option<Skin>>,
+    /// How much of the light each cell of water loses to a shark above it.
+    shadows: Vec<f32>,
 }
+
+/// The darkest a shark's shadow gets on the water.
+const SHADOW: f32 = 0.5;
+
+/// How much of its shadow a covered cell casts on itself and each neighbour.
+const PENUMBRA: [(isize, isize, f32); 9] = [
+    (0, 0, 1.0),
+    (-1, 0, 0.6),
+    (1, 0, 0.6),
+    (0, -1, 0.6),
+    (0, 1, 0.6),
+    (-1, -1, 0.35),
+    (1, -1, 0.35),
+    (-1, 1, 0.35),
+    (1, 1, 0.35),
+];
 
 impl SharkSkins {
     #[must_use]
@@ -63,6 +81,7 @@ impl SharkSkins {
         Self {
             grid,
             cells: vec![None; grid.len()],
+            shadows: vec![0.0; grid.len()],
         }
     }
 
@@ -75,16 +94,38 @@ impl SharkSkins {
     /// cells become solid skin; partly covered cells become edge glyphs.
     pub fn rasterize(&mut self, sharks: &[Shark], t: f32) {
         self.cells.fill(None);
+        self.shadows.fill(0.0);
         let grid = self.grid;
         for sh in sharks {
             let posed = Posed::new(sh);
-            let cells = &mut self.cells;
+            let (cells, shadows) = (&mut self.cells, &mut self.shadows);
+            // Sunlight from the top-left: the shadow falls down and to the
+            // right, farther for a shark nearer the surface.
+            let fall = sh.length * sh.depth;
+            let shift = (
+                (fall * 0.06 / grid.cw).round() as usize,
+                (fall * 0.08 / grid.ch).round() as usize,
+            );
             rasterize(
                 grid,
                 &posed.pose,
                 sh.length * 0.36,
                 |x, y| posed.sample(x, y),
                 |cell: Covered<(Part, f32)>| {
+                    // A soft shadow: each cell shades its neighbours too,
+                    // fading out over a cell.
+                    let (col, row) = (cell.col + shift.0, cell.row + shift.1);
+                    for (dc, dr, falloff) in PENUMBRA {
+                        let (Some(c), Some(r)) =
+                            (col.checked_add_signed(dc), row.checked_add_signed(dr))
+                        else {
+                            continue;
+                        };
+                        if c < grid.cols && r < grid.rows {
+                            let shadow = &mut shadows[r * grid.cols + c];
+                            *shadow = shadow.max(SHADOW * falloff * cell.coverage);
+                        }
+                    }
                     let key = skin_key(cell.centre.at, grid.cw, sh.id);
                     let skin = match cell.centre.hit {
                         Some((part, shade)) if cell.coverage >= 0.6 => {
@@ -114,10 +155,23 @@ impl SharkSkins {
         }
     }
 
-    pub fn paint(&self, frame: &mut Frame) {
+    /// Darkens the water under each shark; call it before anything is drawn
+    /// on the water, so fish swim over the shadows.
+    pub fn paint_shadows(&self, frame: &mut Frame) {
+        let water = frame.bg.rgb();
+        for (i, &shadow) in self.shadows.iter().enumerate() {
+            if shadow > 0.0 && self.cells[i].is_none() {
+                frame.block(i, water.map(|c| c * (1.0 - shadow)));
+            }
+        }
+    }
+
+    pub fn paint(&self, frame: &mut Frame, t: f32) {
         for (i, skin) in self.cells.iter().enumerate() {
             let Some(skin) = *skin else { continue };
-            paint_cell(frame, i, skin);
+            let x = (i % self.grid.cols) as f32 * self.grid.cw;
+            let y = (i / self.grid.cols) as f32 * self.grid.ch;
+            paint_cell(frame, i, skin, caustic(x, y, t));
         }
     }
 }
@@ -149,7 +203,25 @@ fn tinted(level: f32, tint: Rgb, blue: f32) -> Rgb {
     ]
 }
 
-fn paint_cell(frame: &mut Frame, i: usize, skin: Skin) {
+/// Sunlight focused by surface ripples into a drifting net of bright lines,
+/// 0 (none) to 1, at pixel (x, y).
+fn caustic(x: f32, y: f32, t: f32) -> f32 {
+    // Two crossing ripple trains, each warped by the other axis; the light
+    // gathers where their sum crosses zero.
+    let across = y
+        .mul_add(0.017, t * 0.6)
+        .sin()
+        .mul_add(1.3, x * 0.021)
+        .sin();
+    let along = x
+        .mul_add(0.013, -t * 0.45)
+        .sin()
+        .mul_add(1.6, y.mul_add(0.019, t * 0.3))
+        .sin();
+    (across + along).abs().mul_add(-0.5, 1.0).powi(6)
+}
+
+fn paint_cell(frame: &mut Frame, i: usize, skin: Skin, light: f32) {
     let Skin {
         part,
         shade,
@@ -191,8 +263,14 @@ fn paint_cell(frame: &mut Frame, i: usize, skin: Skin) {
         Part::Body | Part::Edge => (shade.mul_add(170.0, 40.0), ramp(shade)),
     };
     // Tinted per species; the classic tint is a cool blue-grey, like a back
-    // seen through deep water.
-    let block = tinted(level * dim, tint, 4.0);
+    // seen through deep water. Caustics brighten the skin, most near the
+    // surface.
+    let sun = if part == Part::Eye {
+        1.0
+    } else {
+        (0.45 * light).mul_add(depth, 1.0)
+    };
+    let block = tinted(level * dim * sun, tint, 4.0);
     frame.block(i, block);
 
     // The texture is the skin a shade darker, the eye a wet glint.
@@ -221,6 +299,45 @@ mod tests {
         assert_eq!(stroke((1.0, -1.0)), '/');
         assert_eq!(stroke((-1.0, 1.0)), '/');
         assert_eq!(stroke((0.0, 0.0)), '.', "no direction");
+    }
+
+    #[test]
+    fn a_shark_casts_a_shadow_on_the_water_beside_it() {
+        let grid = Grid {
+            cols: 160,
+            rows: 80,
+            cw: 7.0,
+            ch: 10.0,
+        };
+        let mut pond = Pond::new(
+            grid.width(),
+            grid.height(),
+            grid.cw,
+            grid.ch,
+            fastrand::Rng::with_seed(5),
+        );
+        let sharks = seed(
+            &[SharkSpec {
+                kind: SharkKind::Classic,
+                size: 1.0,
+            }],
+            &mut pond,
+        );
+        let mut skins = SharkSkins::new(grid);
+        skins.rasterize(&sharks, 0.0);
+        let water = Color(40, 80, 120);
+        let mut frame = Frame::new(grid.cols, grid.rows, water);
+        skins.paint_shadows(&mut frame);
+        let shaded: Vec<usize> = (0..grid.len())
+            .filter(|&i| frame.cells[i].bg != water)
+            .collect();
+        assert!(!shaded.is_empty(), "no shadow");
+        assert!(
+            shaded.iter().all(|&i| !skins.covers(i)),
+            "shadows only on open water"
+        );
+        let darkest = shaded.iter().map(|&i| frame.cells[i].bg.2).min();
+        assert_eq!(darkest, Some(60), "at most half the light is lost");
     }
 
     #[test]
@@ -256,7 +373,7 @@ mod tests {
             );
         }
         let mut frame = Frame::new(grid.cols, grid.rows, Color::default());
-        skins.paint(&mut frame);
+        skins.paint(&mut frame, 0.0);
         let blocks = frame
             .cells
             .iter()

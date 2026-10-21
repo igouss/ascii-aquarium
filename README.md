@@ -34,13 +34,15 @@ rasterised onto cells: five samples per cell against each body and fin shape,
 fully covered cells as a shaded block with a dense glyph, partly covered ones
 as a light edge glyph. Sharks depart from upstream's look toward
 realism: countershaded backs instead of a lit tube, density-ramp glyphs
-instead of letters, no rainbow accents, and outline strokes that follow the
-silhouette. Fish are `-`, wake ripples `·`, kills `*`. The window
+instead of letters, no rainbow accents, outline strokes that follow the
+silhouette, sunlight caustics drifting over their backs, and soft shadows on
+navy water instead of black. Fish are `-`, wake ripples `·`, kills `*`. The window
 paints a quad per run of a block colour in a row and each non-blank cell as a
 glyph shaped once per grid, since each frame's text is new and shaping it
-every frame cost more than the simulation. The grid follows upstream: cells
-`round(width / 124)` px wide for sharks, `round(width / 150)` for koi, 1.45
-times as tall.
+every frame cost more than the simulation. Koi cells follow upstream,
+`round(width / 150)` px wide; shark cells are about half upstream's,
+`round(width / 366)` clamped to 5-7 px, so the bodies have room for detail.
+Both are 1.45 times as tall as wide.
 
 ## Layout
 
