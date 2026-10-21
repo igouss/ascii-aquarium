@@ -82,6 +82,8 @@ pub struct SharkSpec {
 }
 
 /// The upstream landing hero: four of the same shark at different depths.
+/// The screensaver swims the full cast instead; the tests use this one.
+#[cfg(test)]
 pub const DEFAULT_SHARKS: [SharkSpec; 4] = [
     SharkSpec {
         kind: SharkKind::Classic,

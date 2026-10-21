@@ -12,12 +12,14 @@ projects; go see the originals.
 
 ```sh
 ./install.sh                        # builds ~/.local/bin/ascii-aquarium
-ascii-aquarium sharks               # any key, click or mouse move exits
+ascii-aquarium sharks               # all eight kinds; any key, click or mouse move exits
 ascii-aquarium koi --theme light    # upstream's paper-white pond
 ascii-aquarium sharks --cast thresher,hammerhead,mako,nurse
 ```
 
 `--cast` takes upstream's `?sharks=` / `?koi=` lists (first is biggest);
+without it the sharks are the full cast (classic, hammerhead, zebra, tiger,
+greathammer, mako, thresher, nurse) and the koi upstream's four;
 `--max-fps` caps the frame rate (the simulation always steps at 60 Hz).
 
 As the screensaver, the shader screensaver's launcher runs it with

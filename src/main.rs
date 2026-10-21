@@ -50,7 +50,7 @@ struct Cli {
     /// Who swims, biggest first, as upstream's `?sharks=` and `?koi=` take
     /// them: sharks from classic, hammerhead, zebra, tiger, greathammer, mako,
     /// thresher, nurse; koi from kohaku, orange, benigoi, tancho, butterfly
-    /// [default: upstream's]
+    /// [default: every shark kind, in that order; upstream's four koi]
     #[arg(long, value_delimiter = ',', value_name = "KINDS")]
     cast: Vec<String>,
 
@@ -101,7 +101,7 @@ fn run(cli: &Cli) -> Result<(), String> {
     };
     let unknown = |name: &String| format!("no {name} in this scene");
     let kind = match cli.scene.file_stem().and_then(|s| s.to_str()) {
-        Some("sharks") if cli.cast.is_empty() => Kind::Sharks(shark::DEFAULT_SHARKS.to_vec()),
+        Some("sharks") if cli.cast.is_empty() => Kind::Sharks(shark::cast(&SharkKind::ALL)),
         Some("sharks") => Kind::Sharks(shark::cast(
             &cli.cast
                 .iter()
