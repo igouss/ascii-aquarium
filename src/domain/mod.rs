@@ -2,9 +2,7 @@
 //! comes in as `dt`, randomness from the pond's seeded generator, and frames
 //! go out as cells.
 
-pub mod focus;
 pub mod frame;
-pub mod input;
 pub mod koi;
 pub mod koi_skin;
 pub mod math;

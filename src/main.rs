@@ -4,7 +4,6 @@
 mod adapters;
 mod app;
 mod domain;
-mod ports;
 
 use std::{
     io::{self, Write as _},
@@ -19,17 +18,18 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
+use screensaver_session::{
+    focus,
+    hyprland::{HiddenPointer, Hyprland},
+    journal::Journal,
+    siblings,
+    stop::StopReason,
+};
 
 use crate::{
-    adapters::{
-        hyprland::{HiddenPointer, Hyprland},
-        journal::Journal,
-        siblings,
-        window::{self, Exits},
-    },
+    adapters::window::{self, Exits},
     app::Session,
     domain::{
-        input::StopReason,
         koi::{self, KoiKind},
         koi_skin::Theme,
         scene::Kind,
@@ -188,7 +188,9 @@ fn run(cli: &Cli) -> Result<(), String> {
 
     let journal = cli.log.as_deref().map(Journal::new);
     if let Some(journal) = &journal {
-        journal.showing(path).map_err(|e| format!("--log: {e}"))?;
+        journal
+            .showing(&path.display().to_string(), "ascii")
+            .map_err(|e| format!("--log: {e}"))?;
     }
 
     let screensaver = cli.app_id.is_some();
@@ -198,7 +200,7 @@ fn run(cli: &Cli) -> Result<(), String> {
         let left = Arc::clone(&focus_left);
         thread::spawn(move || {
             let started = Instant::now();
-            app::watch(
+            focus::watch(
                 presence,
                 &left,
                 || started.elapsed(),
@@ -206,7 +208,7 @@ fn run(cli: &Cli) -> Result<(), String> {
             )
         });
     }
-    let pointer = screensaver.then(HiddenPointer::new);
+    let pointer = screensaver.then(HiddenPointer::hide);
     let started = Instant::now();
     let on_stop = move |reason: StopReason| {
         drop(pointer);
@@ -217,7 +219,7 @@ fn run(cli: &Cli) -> Result<(), String> {
         }
         // Dismissing one monitor's screensaver dismisses them all. Those
         // stopped by a signal (likely from a sibling) leave the rest be.
-        if screensaver && reason != StopReason::WindowClosed {
+        if screensaver && reason.stops_siblings() {
             siblings::terminate_siblings();
         }
     };

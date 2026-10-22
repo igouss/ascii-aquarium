@@ -26,12 +26,11 @@ use gpui::{
     size,
 };
 
+use screensaver_session::{dismissal::Input, stop::StopReason};
+
 use crate::{
     app::Session,
-    domain::{
-        frame::{Color, Frame, Grid},
-        input::{Input, StopReason},
-    },
+    domain::frame::{Color, Frame, Grid},
 };
 
 /// The originals draw their glyphs at this fraction of the row height.

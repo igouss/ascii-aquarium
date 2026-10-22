@@ -44,7 +44,9 @@ when one comes up the rotation runs it with
 `--app-id org.omarchy.screensaver --seed <n> --log <run log> <scenes...>`; the
 first scene it knows plays. That mode hides the pointer, stops when focus leaves or the session locks,
 stops the other monitors' instances, and logs `showing` / `stopped` lines the
-rotation reads.
+rotation reads. That session logic is
+[screensaver-session](https://github.com/igouss/screensaver-session), shared
+with the other runners.
 
 ## How it draws
 

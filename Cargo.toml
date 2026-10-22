@@ -15,7 +15,7 @@ fastrand = "2.5"
 # pins an xattr that no longer builds. Wayland only; Omarchy has no X11.
 gpui = { package = "gpui-pre", version = "=0.3.6", default-features = false, features = ["wayland"] }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.6", features = ["wayland"] }
-rustix = { version = "1.1", features = ["process"] }
+screensaver-session = { git = "https://github.com/igouss/screensaver-session" }
 
 [dev-dependencies]
 proptest = "1.11"

@@ -256,7 +256,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "proptest",
- "rustix",
+ "screensaver-session",
 ]
 
 [[package]]
@@ -4766,6 +4766,17 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "screensaver-session"
+version = "0.1.0"
+source = "git+https://github.com/igouss/screensaver-session#eddf6ccc42b970b5ebb877d80410f984f65986cc"
+dependencies = [
+ "chrono",
+ "clap",
+ "ctrlc",
+ "rustix",
+]
 
 [[package]]
 name = "seahash"

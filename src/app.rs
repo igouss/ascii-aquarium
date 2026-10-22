@@ -1,19 +1,16 @@
 //! One screensaver session, driven by its host: frames on the host's clock,
-//! input that may dismiss it, and a watch for focus loss.
+//! and input that may dismiss it.
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+use std::time::Duration;
+
+use screensaver_session::{
+    dismissal::{Dismissal, Input},
+    stop::StopReason,
 };
 
-use crate::{
-    domain::{
-        focus::FocusWatch,
-        frame::{Color, Frame, Grid},
-        input::{Dismissal, Input, StopReason},
-        scene::{Kind, STEP, Scene},
-    },
-    ports::Presence,
+use crate::domain::{
+    frame::{Color, Frame, Grid},
+    scene::{Kind, STEP, Scene},
 };
 
 /// At most this many simulation steps per frame; a slower machine runs slow
@@ -87,31 +84,10 @@ impl Session {
     }
 }
 
-/// Asks `presence` whether the screensaver should stay, with a `poll`
-/// between asks, until `stop` is set. Sets `stop` itself once the screensaver
-/// has been absent for the grace period, and then returns true.
-pub fn watch(
-    mut presence: impl Presence,
-    stop: &AtomicBool,
-    now: impl Fn() -> Duration,
-    poll: impl Fn(),
-) -> bool {
-    let mut focus = FocusWatch::default();
-    while !stop.load(Ordering::Relaxed) {
-        if focus.observe(presence.should_stay(), now()) {
-            stop.store(true, Ordering::Relaxed);
-            return true;
-        }
-        poll();
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{focus::GRACE, shark::DEFAULT_SHARKS};
-    use std::{cell::Cell, sync::atomic::AtomicU64};
+    use crate::domain::shark::DEFAULT_SHARKS;
 
     fn ms(ms: u64) -> Duration {
         Duration::from_millis(ms)
@@ -159,52 +135,5 @@ mod tests {
         // A ten-second hitch is a tenth of a second of simulation, at most.
         slow.advance(GRID, ms(10_000));
         assert!(slow.behind < STEP, "{}", slow.behind);
-    }
-
-    /// A clock that only moves when the watch polls.
-    #[derive(Default)]
-    struct Clock(AtomicU64);
-
-    impl Clock {
-        fn now(&self) -> Duration {
-            Duration::from_millis(self.0.load(Ordering::Relaxed))
-        }
-
-        fn advance(&self, by: u64) {
-            let now = self.0.fetch_add(by, Ordering::Relaxed);
-            assert!(now <= 120_000, "still watching after two minutes");
-        }
-    }
-
-    #[test]
-    fn losing_focus_for_the_grace_period_stops_it() {
-        let clock = Clock::default();
-        let stop = AtomicBool::new(false);
-        let gone = watch(|| false, &stop, || clock.now(), || clock.advance(100));
-        assert!(gone && stop.load(Ordering::Relaxed));
-        assert!(clock.now() >= GRACE && clock.now() < GRACE + ms(200));
-    }
-
-    #[test]
-    fn keeping_focus_keeps_the_watch_going_until_stopped() {
-        let clock = Clock::default();
-        let stop = AtomicBool::new(false);
-        let asked = Cell::new(0);
-        let gone = watch(
-            || {
-                asked.set(asked.get() + 1);
-                true
-            },
-            &stop,
-            || clock.now(),
-            || {
-                clock.advance(100);
-                if clock.now() > ms(5000) {
-                    stop.store(true, Ordering::Relaxed);
-                }
-            },
-        );
-        assert!(!gone);
-        assert!(asked.get() > 40);
     }
 }
