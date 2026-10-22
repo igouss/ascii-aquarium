@@ -8,7 +8,7 @@ mod ports;
 
 use std::{
     io::{self, Write as _},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     sync::{
         Arc,
@@ -37,15 +37,53 @@ use crate::{
     },
 };
 
+/// The scenes this screensaver shows.
+#[derive(Debug, Clone, Copy)]
+enum Scene {
+    Sharks,
+    Koi,
+}
+
+impl Scene {
+    const ALL: [Self; 2] = [Self::Sharks, Self::Koi];
+
+    /// The name `--list` prints and the scene arguments take.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Sharks => "sharks",
+            Self::Koi => "koi",
+        }
+    }
+
+    /// The scene `path` names: its file name without extension, so the
+    /// rotation's `sharks.ascii` is the sharks.
+    fn named(path: &Path) -> Option<Self> {
+        let stem = path.file_stem()?;
+        Self::ALL.into_iter().find(|scene| stem == scene.name())
+    }
+
+    /// The first of `paths` that names a scene, with its scene.
+    fn first(paths: &[PathBuf]) -> Option<(&PathBuf, Self)> {
+        paths
+            .iter()
+            .find_map(|path| Some((path, Self::named(path)?)))
+    }
+}
+
 /// How often the screensaver asks Hyprland whether it still has focus.
 const PRESENCE_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
-    /// The scene: `sharks` or `koi`, or a path whose file name (without
-    /// extension) is one, such as the rotation's `sharks.ascii`
-    scene: PathBuf,
+    /// Scenes in order of preference; the first that is `sharks` or `koi`, or
+    /// a path whose file name (without extension) is one, plays
+    #[arg(required_unless_present = "list")]
+    scenes: Vec<PathBuf>,
+
+    /// Print the scenes, one per line, for screensaver-rotation, and exit
+    #[arg(long)]
+    list: bool,
 
     /// Who swims, biggest first, as upstream's `?sharks=` and `?koi=` take
     /// them: sharks from classic, hammerhead, zebra, tiger, greathammer, mako,
@@ -72,7 +110,7 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     app_id: Option<String>,
 
-    /// Append "showing" and "stopped" entries to the shader screensaver's run log
+    /// Append "showing" and "stopped" entries to the screensaver run log
     #[arg(long, value_name = "FILE")]
     log: Option<PathBuf>,
 }
@@ -99,17 +137,34 @@ fn run(cli: &Cli) -> Result<(), String> {
         ThemeArg::Dark => Theme::Dark,
         ThemeArg::Light => Theme::Light,
     };
+    if cli.list {
+        let mut out = io::stdout().lock();
+        for scene in Scene::ALL {
+            writeln!(out, "{}", scene.name()).map_err(|e| format!("can't list scenes: {e}"))?;
+        }
+        return Ok(());
+    }
+    let Some((path, scene)) = Scene::first(&cli.scenes) else {
+        return Err(format!(
+            "no scene among {}: try sharks or koi",
+            cli.scenes
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
     let unknown = |name: &String| format!("no {name} in this scene");
-    let kind = match cli.scene.file_stem().and_then(|s| s.to_str()) {
-        Some("sharks") if cli.cast.is_empty() => Kind::Sharks(shark::cast(&SharkKind::ALL)),
-        Some("sharks") => Kind::Sharks(shark::cast(
+    let kind = match scene {
+        Scene::Sharks if cli.cast.is_empty() => Kind::Sharks(shark::cast(&SharkKind::ALL)),
+        Scene::Sharks => Kind::Sharks(shark::cast(
             &cli.cast
                 .iter()
                 .map(|n| SharkKind::named(n).ok_or_else(|| unknown(n)))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
-        Some("koi") if cli.cast.is_empty() => Kind::Koi(koi::DEFAULT_KOI.to_vec(), theme),
-        Some("koi") => Kind::Koi(
+        Scene::Koi if cli.cast.is_empty() => Kind::Koi(koi::DEFAULT_KOI.to_vec(), theme),
+        Scene::Koi => Kind::Koi(
             koi::cast(
                 &cli.cast
                     .iter()
@@ -118,12 +173,6 @@ fn run(cli: &Cli) -> Result<(), String> {
             ),
             theme,
         ),
-        _ => {
-            return Err(format!(
-                "no scene named {}: try sharks or koi",
-                cli.scene.display()
-            ));
-        }
     };
     let fps = if cli.max_fps == 0 {
         60
@@ -139,9 +188,7 @@ fn run(cli: &Cli) -> Result<(), String> {
 
     let journal = cli.log.as_deref().map(Journal::new);
     if let Some(journal) = &journal {
-        journal
-            .showing(&cli.scene)
-            .map_err(|e| format!("--log: {e}"))?;
+        journal.showing(path).map_err(|e| format!("--log: {e}"))?;
     }
 
     let screensaver = cli.app_id.is_some();
@@ -187,4 +234,31 @@ fn run(cli: &Cli) -> Result<(), String> {
         },
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scenes_are_named_by_their_file_stem() {
+        assert!(matches!(
+            Scene::named(Path::new("sharks")),
+            Some(Scene::Sharks)
+        ));
+        assert!(matches!(
+            Scene::named(Path::new("/x/koi.ascii")),
+            Some(Scene::Koi)
+        ));
+        assert!(Scene::named(Path::new("whales")).is_none());
+        assert!(Scene::named(Path::new("")).is_none());
+    }
+
+    #[test]
+    fn the_first_known_scene_plays() {
+        let cli = Cli::parse_from(["ascii-aquarium", "whales", "koi", "sharks"]);
+        let first = Scene::first(&cli.scenes);
+        assert!(matches!(first, Some((path, Scene::Koi)) if path == Path::new("koi")));
+        assert!(Scene::first(&[PathBuf::from("whales")]).is_none());
+    }
 }

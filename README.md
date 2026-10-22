@@ -38,10 +38,11 @@ without it the sharks are the full cast (classic, hammerhead, zebra, tiger,
 greathammer, mako, thresher, nurse) and the koi upstream's four;
 `--max-fps` caps the frame rate (the simulation always steps at 60 Hz).
 
-As the screensaver, the shader screensaver's launcher runs it with
-`--app-id org.omarchy.screensaver --log <run log> <collection>/sharks.ascii`
-when `sharks.ascii` or `koi.ascii` comes up in `screensaver-shaders pick`.
-That mode hides the pointer, stops when focus leaves or the session locks,
+It is a [screensaver-rotation](https://github.com/igouss/screensaver-rotation)
+runner: `install.sh` links it in as `aquarium`, `--list` names its scenes, and
+when one comes up the rotation runs it with
+`--app-id org.omarchy.screensaver --seed <n> --log <run log> <scenes...>`; the
+first scene it knows plays. That mode hides the pointer, stops when focus leaves or the session locks,
 stops the other monitors' instances, and logs `showing` / `stopped` lines the
 rotation reads.
 
